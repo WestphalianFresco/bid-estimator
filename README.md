@@ -1,127 +1,135 @@
 # Gov Bid Estimator
 
-面向小型总承包商的联邦/州政府建筑合同成本估算器。
+A cost estimator for small general contractors bidding on federal/state government construction contracts.
 
-## 定位(先读这段)
+## Positioning (read this first)
 
-这是一个 **ROM / conceptual estimator** —— AACE International Class 4–5,
-预期精度 **±20~30%**。用途是回答:
+This is a **ROM / conceptual estimator** — AACE International Class 4–5,
+expected accuracy **±20–30%**. It's meant to answer:
 
-- 这个标值不值得投?
-- 我的直觉报价在不在合理区间?
-- 我漏了哪些成本项?
+- Is this solicitation worth pursuing?
+- Is my gut-feel price in a reasonable range?
+- Which cost items am I forgetting?
 
-它**不是** detailed bid estimator。不要拿它的输出直接当投标价提交。
+It is **not** a detailed bid estimator. Do not submit its output directly as a bid price.
 
-## 三层架构
+## Three-layer architecture
 
 ```
-客户输入(RFP 文本 / 自然语言需求)
+Client input (RFP text / natural-language requirements)
         │
         ▼
 ┌────────────────────────────────────────────────┐
-│ Layer 1 — Claude:结构化提取                    │
-│ extract.ts                                     │
-│ 自然语言 → ExtractedScope(schema 强制约束)     │
-│ 同时输出「缺失信息」和「需要澄清的问题」         │
+│ Layer 1 — Claude: structured extraction         │
+│ extract.ts                                      │
+│ Natural language → ExtractedScope (schema-bound)│
+│ Also outputs "missing info" and "questions to   │
+│ clarify"                                         │
 └────────────────────────────────────────────────┘
         │  ExtractedScope
         ▼
 ┌────────────────────────────────────────────────┐
-│ Layer 2 — 确定性定价引擎(纯代码,无 AI)        │
-│ price.ts                                       │
-│                                                │
-│  工作量 × 生产率 → 工时                         │
-│  工时 × Davis-Bacon 装载工资率 → 直接人工       │
-│  + 材料 + 设备 + 分包 = 直接成本                │
-│  + 现场管理费 (Div 01)                          │
-│  + 公司管理费 / G&A                             │
-│  + 利润                                        │
-│  + 保险                                        │
-│  + 或然费 (contingency)                         │
-│  ÷ (1 - 保证金率)  ← bond 按最终合同额计,需反算  │
-│  = 投标价                                      │
-│                                                │
-│  ★ 所有金额都在这一层产生。全部用整数分计算。    │
+│ Layer 2 — Deterministic pricing engine (pure    │
+│ code, no AI)                                    │
+│ price.ts                                        │
+│                                                 │
+│  Quantity × productivity → labor hours          │
+│  Hours × Davis-Bacon loaded wage rate → direct  │
+│    labor                                        │
+│  + materials + equipment + subs = direct cost   │
+│  + field overhead (Div 01)                      │
+│  + company overhead / G&A                        │
+│  + profit                                       │
+│  + insurance                                    │
+│  + contingency                                  │
+│  ÷ (1 − bond rate)  ← bond is on final contract  │
+│    amount, so back it out                       │
+│  = bid price                                    │
+│                                                 │
+│  ★ Every dollar amount is produced in this      │
+│    layer. All math in integer cents.            │
 └────────────────────────────────────────────────┘
         │  PricedEstimate
         ▼
 ┌────────────────────────────────────────────────┐
-│ Layer 3 — Claude:解释、假设清单、风险提示       │
-│ explain.ts                                     │
-│ 只读数字,不改数字。生成客户看得懂的说明。       │
+│ Layer 3 — Claude: explanation, assumption list, │
+│ risk callouts                                   │
+│ explain.ts                                      │
+│ Reads the numbers only, never changes them.     │
+│ Produces a client-readable writeup.             │
 └────────────────────────────────────────────────┘
         │
         ▼
 ┌────────────────────────────────────────────────┐
-│ 交叉校验(独立于 Layer 2)                       │
-│ data/comparables.ts                            │
-│ USAspending 同类合同中标价 p25/p50/p75          │
-│ bottom-up 结果落在区间外 → 红旗                 │
+│ Cross-check (independent of Layer 2)            │
+│ data/comparables.ts                             │
+│ Awarded prices of comparable USAspending        │
+│ contracts, p25/p50/p75                          │
+│ Bottom-up result outside the range → red flag   │
 └────────────────────────────────────────────────┘
 ```
 
-**核心不变量:每一个金额都来自 Layer 2 的确定性代码。Claude 只碰文字。**
-同一份输入 + 同一套假设 ⇒ 永远得到同一个数字,可复现、可审计。
+**Core invariant: every dollar amount comes from Layer 2's deterministic code. Claude only touches text.**
+The same input + the same assumptions ⇒ always the same number — reproducible and auditable.
 
-## 数据来源
+## Data sources
 
-### 有的(公开、免费)
+### Available (public, free)
 
-| 数据 | 来源 | 备注 |
+| Data | Source | Notes |
 |---|---|---|
-| Davis-Bacon 工资裁定 | SAM.gov Wage Determinations | 按县 + 工种,含 base rate 与 fringe。联邦建筑合同 >$2,000 强制适用 |
-| 材料价格指数 | BLS Producer Price Index | 只给**涨幅**,不给绝对单价。用于时间点调整 |
-| 同类合同中标价 | USAspending API v2 | 有 NAICS / PSC / 履约地 / 金额;**没有建筑面积**,所以只能做总额区间校验,推不出 $/SF |
-| 招标机会 | SAM.gov Opportunities API | 需申请 API key |
+| Davis-Bacon wage determinations | SAM.gov Wage Determinations | By county + trade, includes base rate and fringe. Mandatory on federal construction contracts >$2,000 |
+| Material price indices | BLS Producer Price Index | Gives the **rate of change** only, not absolute unit prices. Used for point-in-time adjustment |
+| Awarded prices of comparable contracts | USAspending API v2 | Has NAICS / PSC / place of performance / amount; **no building area**, so it can only validate the total range, not derive $/SF |
+| Solicitation opportunities | SAM.gov Opportunities API | Requires an API key |
 
-### 没有的(必须客户自备或购买)
+### Not available (client must supply or purchase)
 
-| 数据 | 怎么办 |
+| Data | What to do |
 |---|---|
-| 劳动生产率(工时/单位) | 客户录入自己的历史数据。`assumptions.ts` 提供可编辑的起始默认值 |
-| 材料绝对单价 | 客户录入本地供应商报价。BLS PPI 负责把旧报价调整到当前时点 |
+| Labor productivity (hours/unit) | Client enters their own historical data. `assumptions.ts` provides editable starting defaults |
+| Absolute material unit prices | Client enters local supplier quotes. BLS PPI adjusts old quotes to the current point in time |
 
-> ⚠️ API 端点和字段名请对照当前官方文档核实 —— 政府 API 会改。
-> 代码里标了 `VERIFY:` 的地方是需要你确认的。
+> ⚠️ Verify API endpoints and field names against the current official docs — government APIs change.
+> Places marked `VERIFY:` in the code are things you need to confirm.
 
-## 目录
+## Directory layout
 
-同一套代码提供两个版本,**逻辑完全一致**,只差注释:
+The same codebase ships in two versions, **logically identical**, differing only in comments:
 
-- `zh/` —— 带中文注释,解释了每个设计决策的原因。用来读懂和维护。
-- `clean/` —— 无注释纯代码,英文标识符和提示词。用来直接投产。
+- `zh/` — with Chinese comments explaining the reason behind each design decision. For reading and maintaining.
+- `clean/` — no comments, English identifiers and prompts. For direct production use.
 
 ```
 zh/ | clean/
-  money.ts           整数分金额类型,避免浮点漂移
-  schema.ts          层间契约(Zod)。改这里 = 改接口
-  assumptions.ts     生产率 / 材料单价 / 加成率 —— 客户可调,是他们的资产
-  prompts.ts         两个 system prompt(可缓存的稳定前缀)
-  extract.ts         Layer 1 —— Claude 结构化提取
-  price.ts           Layer 2 —— 纯函数,无网络无 AI,唯一产出金额的地方
-  explain.ts         Layer 3 —— Claude 流式解释
-  pipeline.ts        编排三层 + 生成审计快照(唯一允许 I/O 和读时钟的地方)
-  demo.ts            命令行演示,跑一次完整估算
-  price.test.ts      Layer 2 的单元测试
+  money.ts           Integer-cents money type, avoids float drift
+  schema.ts          Cross-layer contract (Zod). Change this = change the interface
+  assumptions.ts     Productivity / material unit prices / markups — client-tunable, their asset
+  prompts.ts         The two system prompts (stable, cacheable prefixes)
+  extract.ts         Layer 1 — Claude structured extraction
+  price.ts           Layer 2 — pure function, no network no AI, the only place dollars are produced
+  explain.ts         Layer 3 — Claude streaming explanation
+  pipeline.ts        Orchestrates the three layers + produces an audit snapshot (only place allowed I/O and clock reads)
+  demo.ts            Command-line demo, runs one full estimate
+  price.test.ts      Layer 2 unit tests
   data/
-    wage-determinations.ts   Davis-Bacon 查询 + 工种名映射
-    comparables.ts           USAspending 交叉校验
-    escalation.ts            BLS PPI 时点调整
+    wage-determinations.ts   Davis-Bacon lookup + trade-name mapping
+    comparables.ts           USAspending cross-check
+    escalation.ts            BLS PPI point-in-time adjustment
 
 nextjs/
-  app/page.tsx                    最小可用界面
-  app/api/estimate/route.ts       流式接口(NDJSON)
+  app/page.tsx                    Minimal usable UI
+  app/api/estimate/route.ts       Streaming endpoint (NDJSON)
 ```
 
-## 起步
+## Getting started
 
 ```bash
 npm install
-npm test          # Layer 2 单元测试 —— 不需要 API key,不需要网络
+npm test          # Layer 2 unit tests — no API key, no network needed
 ```
 
-跑完整估算需要 API key:
+Running a full estimate needs an API key:
 
 ```bash
 # PowerShell
@@ -129,38 +137,39 @@ $env:ANTHROPIC_API_KEY = "sk-ant-..."
 npm run demo
 ```
 
-接到 Next.js:
+Wiring into Next.js:
 
 ```bash
 npx create-next-app@latest bid-app --typescript --app --no-src-dir --import-alias "@/*"
-# 把 clean/(或 zh/)复制进 bid-app/lib/,把 nextjs/app/ 复制进 bid-app/app/
-# .env.local 里写 ANTHROPIC_API_KEY
+# Copy clean/ (or zh/) into bid-app/lib/, and nextjs/app/ into bid-app/app/
+# Put ANTHROPIC_API_KEY in .env.local
 npm run dev
 ```
 
-API key 只在服务器端使用(Route Handler / Server Action),绝不能进浏览器。
+The API key is used server-side only (Route Handler / Server Action) and must never reach the browser.
 
-## 上线前必须做的三件事
+## Three things you must do before going live
 
-1. **免责声明** —— 「估算参考,非投标保证。使用者须自行核实。」放在输出页面上,不是埋在 ToS 里。
-2. **人工复核提示** —— 超过一定金额或置信度低的估算,提示客户请注册估算师复核。
-3. **完整快照** —— 每份估算保存:输入原文、当时的假设值、工资裁定版本、引擎版本号、时间戳。
-   出争议时这份记录是你唯一的保护。见 `schema.ts` 的 `EstimateSnapshot`。
+1. **Disclaimer** — "Estimate for reference, not a bid guarantee. User must verify independently." Put it on the output page, not buried in the ToS.
+2. **Manual-review prompt** — for estimates above a certain amount or with low confidence, prompt the client to have a registered estimator review them.
+3. **Full snapshot** — for each estimate, save: the original input text, the assumption values at the time, the wage-determination version, the engine version number, and a timestamp.
+   When a dispute arises, this record is your only protection. See `EstimateSnapshot` in `schema.ts`.
 
-## 上线前必须改的三处配置
+## Three config settings you must change before going live
 
-| 位置 | 现在 | 上线要改成 |
+| Location | Currently | Change to for production |
 |---|---|---|
-| `app/api/estimate/route.ts` | `useFixtureWages: true` | `false` + 配置 `SAM_GOV_API_KEY` |
-| 同上 | `assumptions: STARTING_DEFAULTS` | 当前登录客户自己的假设库 |
-| `data/escalation.ts` | `PPI_SERIES` 是空的 | 去 BLS 查证后填(**填错比留空更糟**) |
+| `app/api/estimate/route.ts` | `useFixtureWages: true` | `false` + configure `SAM_GOV_API_KEY` |
+| same | `assumptions: STARTING_DEFAULTS` | the currently logged-in client's own assumption library |
+| `data/escalation.ts` | `PPI_SERIES` is empty | fill it in after verifying against BLS (**filling it wrong is worse than leaving it empty**) |
 
-第一条最要紧。`makeFixtureWageTable()` 返回的工资率是编的,`determinationId` 写着
-`FIXTURE-DO-NOT-USE-IN-PROD`。用它算出来的报价看起来完全正常 —— 这正是危险的地方。
+The first one matters most. The wage rates returned by `makeFixtureWageTable()` are made up, and the
+`determinationId` reads `FIXTURE-DO-NOT-USE-IN-PROD`. A bid computed from them looks completely normal —
+which is exactly what makes it dangerous.
 
-## 测试
+## Testing
 
-Layer 2 是纯函数,没有网络和 AI,**必须有单元测试**。这是唯一会产出金额的地方。
+Layer 2 is a pure function with no network and no AI, so it **must have unit tests**. It's the only place that produces dollar amounts.
 
 ```bash
 npm test

@@ -7,11 +7,12 @@ import { waterfallRows } from "@/lib/price";
 import type { EstimateSnapshot } from "@/lib/schema";
 
 /**
- * 最小可用界面。
+ * Minimal usable UI.
  *
- * 注意这个文件里**没有任何金额计算** —— 所有数字都是服务器算好传过来的,
- * 这里只负责 formatUSD 显示和排版。客户端不参与定价,这是刻意的:
- * 浏览器里的代码是可以被改的,金额不能在那里产生。
+ * Note that this file does **no money math** — every number is computed on the
+ * server and sent over; here we only handle formatUSD display and layout. The
+ * client takes no part in pricing, and that's deliberate: browser code can be
+ * tampered with, so dollar amounts must never be produced there.
  */
 
 interface EstimatePayload {
@@ -42,12 +43,12 @@ export default function Page() {
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `请求失败 (${res.status})`);
+        throw new Error(body.error ?? `Request failed (${res.status})`);
       }
-      if (!res.body) throw new Error("响应没有内容");
+      if (!res.body) throw new Error("Response had no body");
 
-      // 逐行读 NDJSON。注意 chunk 边界不一定落在换行处,
-      // 所以要留 buffer 拼接不完整的行。
+      // Read NDJSON line by line. Note that chunk boundaries don't necessarily
+      // fall on newlines, so keep a buffer to stitch incomplete lines together.
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -58,7 +59,7 @@ export default function Page() {
         buffer += decoder.decode(value, { stream: true });
 
         const lines = buffer.split("\n");
-        buffer = lines.pop() ?? ""; // 最后一段可能不完整,留到下一轮
+        buffer = lines.pop() ?? ""; // last segment may be incomplete; hold it for the next round
 
         for (const raw of lines) {
           if (!raw.trim()) continue;
@@ -87,13 +88,13 @@ export default function Page() {
     <main style={{ maxWidth: 900, margin: "0 auto", padding: 24, fontFamily: "system-ui" }}>
       <h1 style={{ fontSize: 24, marginBottom: 4 }}>Gov Bid Estimator</h1>
       <p style={{ color: "#666", fontSize: 14, marginTop: 0 }}>
-        ROM / conceptual estimate — 预期精度 ±20~30%。不是可直接提交的投标价。
+        ROM / conceptual estimate — expected accuracy ±20–30%. Not a directly submittable bid price.
       </p>
 
       <textarea
         value={rfpText}
         onChange={(e) => setRfpText(e.target.value)}
-        placeholder="粘贴招标文件的工作范围 (Scope of Work) 章节…"
+        placeholder="Paste the Scope of Work section of the solicitation…"
         rows={14}
         style={{
           width: "100%",
@@ -115,12 +116,12 @@ export default function Page() {
           cursor: busy ? "wait" : "pointer",
         }}
       >
-        {busy ? "估算中…" : "生成估算"}
+        {busy ? "Estimating…" : "Generate estimate"}
       </button>
 
       {error && (
         <div style={{ marginTop: 16, padding: 12, background: "#fee", borderRadius: 6 }}>
-          <strong>出错了:</strong> {error}
+          <strong>Something went wrong:</strong> {error}
         </div>
       )}
 
@@ -141,7 +142,7 @@ export default function Page() {
           </section>
 
           <section style={{ marginTop: 24 }}>
-            <h3 style={{ fontSize: 15 }}>加成瀑布</h3>
+            <h3 style={{ fontSize: 15 }}>Markup waterfall</h3>
             <table style={{ width: "100%", fontSize: 14, borderCollapse: "collapse" }}>
               <tbody>
                 {waterfallRows(est.totals, STARTING_DEFAULTS.markups).map((r, i) => (
@@ -167,7 +168,7 @@ export default function Page() {
 
           {allWarnings.length > 0 && (
             <section style={{ marginTop: 24 }}>
-              <h3 style={{ fontSize: 15 }}>警告({allWarnings.length})</h3>
+              <h3 style={{ fontSize: 15 }}>Warnings ({allWarnings.length})</h3>
               <ul style={{ fontSize: 14, lineHeight: 1.6, paddingLeft: 20 }}>
                 {allWarnings.map((w, i) => (
                   <li key={i} style={{ marginBottom: 6 }}>
@@ -182,7 +183,7 @@ export default function Page() {
 
       {explanation && (
         <section style={{ marginTop: 24 }}>
-          <h3 style={{ fontSize: 15 }}>估算说明</h3>
+          <h3 style={{ fontSize: 15 }}>Estimate notes</h3>
           <div style={{ fontSize: 14, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
             {explanation}
           </div>
@@ -199,11 +200,12 @@ export default function Page() {
             color: "#888",
           }}
         >
-          本估算仅供参考,不构成投标保证。使用者须自行核实全部工程量、单价与假设。
-          关键项目请由注册估算师复核。
+          This estimate is for reference only and is not a bid guarantee. The user must
+          independently verify all quantities, unit prices, and assumptions. Have key items
+          reviewed by a registered estimator.
           <br />
-          引擎版本 {payload.snapshot.engineVersion} · 快照 {payload.snapshot.id} ·
-          工资裁定 {payload.snapshot.wageDeterminationId || "未加载"}
+          Engine version {payload.snapshot.engineVersion} · Snapshot {payload.snapshot.id} ·
+          Wage determination {payload.snapshot.wageDeterminationId || "not loaded"}
         </footer>
       )}
     </main>

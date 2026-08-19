@@ -11,5 +11,5 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["zh/**/*.ts", "clean/**/*.ts"]
+  "include": ["src/**/*.ts"]
 }

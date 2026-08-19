@@ -95,13 +95,8 @@ The same input + the same assumptions ⇒ always the same number — reproducibl
 
 ## Directory layout
 
-The same codebase ships in two versions, **logically identical**, differing only in comments:
-
-- `zh/` — with Chinese comments explaining the reason behind each design decision. For reading and maintaining.
-- `clean/` — no comments, English identifiers and prompts. For direct production use.
-
 ```
-zh/ | clean/
+src/
   money.ts           Integer-cents money type, avoids float drift
   schema.ts          Cross-layer contract (Zod). Change this = change the interface
   assumptions.ts     Productivity / material unit prices / markups — client-tunable, their asset
@@ -141,7 +136,7 @@ Wiring into Next.js:
 
 ```bash
 npx create-next-app@latest bid-app --typescript --app --no-src-dir --import-alias "@/*"
-# Copy clean/ (or zh/) into bid-app/lib/, and nextjs/app/ into bid-app/app/
+# Copy src/ into bid-app/lib/, and nextjs/app/ into bid-app/app/
 # Put ANTHROPIC_API_KEY in .env.local
 npm run dev
 ```

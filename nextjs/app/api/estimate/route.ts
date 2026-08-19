@@ -3,23 +3,26 @@ import { streamExplanation } from "@/lib/explain";
 import { runEstimate } from "@/lib/pipeline";
 
 /**
- * 估算接口。
+ * Estimate endpoint.
  *
- * ⚠️ 这是**服务器端**代码。API key 从 process.env 读,永远不会到浏览器。
- *    不要把这里的逻辑挪到客户端组件里。
+ * ⚠️ This is **server-side** code. The API key is read from process.env and
+ *    never reaches the browser. Do not move this logic into a client component.
  *
- * 响应格式是 NDJSON(每行一个 JSON),一次往返里先发数字后发文字:
+ * The response format is NDJSON (one JSON per line); a single round trip sends
+ * the numbers first, then the text:
  *
- *   {"type":"estimate", ...}     ← 第一行:完整的确定性估算结果
- *   {"type":"text","delta":"…"}  ← 后续:Layer 3 的解释,逐块流出
+ *   {"type":"estimate", ...}     ← first line: the full deterministic estimate
+ *   {"type":"text","delta":"…"}  ← after: the Layer 3 explanation, streamed in chunks
  *   {"type":"done"}
  *
- * 为什么不拆成两个接口:数字要是先返回给浏览器、再由浏览器发回来求解释,
- * 客户端就有机会篡改金额。一次往返里搞定,金额从不离开服务器的控制。
+ * Why not split this into two endpoints: if the numbers were returned to the
+ * browser first and then sent back for an explanation, the client would have a
+ * chance to tamper with the amounts. Doing it in one round trip keeps the
+ * amounts under server control the whole time.
  */
 
 export const runtime = "nodejs";
-/** 流式响应可能跑几十秒,Vercel 默认 10s 会截断 */
+/** A streaming response can run for tens of seconds; Vercel's default 10s would cut it off */
 export const maxDuration = 300;
 
 export async function POST(req: Request) {
@@ -28,26 +31,26 @@ export async function POST(req: Request) {
     const body = await req.json();
     rfpText = String(body.rfpText ?? "").trim();
   } catch {
-    return Response.json({ error: "请求体不是合法 JSON" }, { status: 400 });
+    return Response.json({ error: "Request body is not valid JSON" }, { status: 400 });
   }
 
   if (rfpText.length < 50) {
     return Response.json(
-      { error: "招标文件内容太短,至少需要 50 个字符" },
+      { error: "Solicitation text is too short; at least 50 characters are required" },
       { status: 400 },
     );
   }
   if (rfpText.length > 500_000) {
     return Response.json(
-      { error: "内容过长。请只粘贴工作范围 (Scope of Work) 章节,或分段处理。" },
+      { error: "Content too long. Paste only the Scope of Work section, or process it in parts." },
       { status: 413 },
     );
   }
 
   if (!process.env.ANTHROPIC_API_KEY) {
-    // 配置问题不要泄漏细节给客户端,日志里留痕就够了
-    console.error("ANTHROPIC_API_KEY 未配置");
-    return Response.json({ error: "服务暂时不可用" }, { status: 503 });
+    // Don't leak configuration details to the client; logging it is enough
+    console.error("ANTHROPIC_API_KEY is not configured");
+    return Response.json({ error: "Service temporarily unavailable" }, { status: 503 });
   }
 
   const encoder = new TextEncoder();
@@ -57,19 +60,20 @@ export async function POST(req: Request) {
     async start(controller) {
       try {
         // ── Layer 1 + Layer 2 ──
-        // 生产环境要把 assumptions 换成当前登录客户的假设库,
-        // 并去掉 useFixtureWages、传入真实的 samApiKey。
+        // In production, swap assumptions for the currently logged-in client's
+        // assumption library, drop useFixtureWages, and pass a real samApiKey.
         const { snapshot, comparablesCaveat, pipelineWarnings } = await runEstimate({
           rfpText,
           assumptions: STARTING_DEFAULTS,
           id: crypto.randomUUID(),
           now: new Date().toISOString(),
-          useFixtureWages: true, // ⚠️ 上线前改成 false 并配置 samApiKey
+          useFixtureWages: true, // ⚠️ set to false and configure samApiKey before going live
           samApiKey: process.env.SAM_GOV_API_KEY,
           blsApiKey: process.env.BLS_API_KEY,
         });
 
-        // 数字先走,前端可以立刻渲染表格,不用等解释生成完
+        // Numbers go first so the frontend can render the table immediately,
+        // without waiting for the explanation to finish generating
         controller.enqueue(
           line({ type: "estimate", snapshot, comparablesCaveat, pipelineWarnings }),
         );
@@ -87,8 +91,9 @@ export async function POST(req: Request) {
         controller.enqueue(line({ type: "done" }));
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
-        console.error("估算失败:", e);
-        // 已经开始流了就没法改 HTTP 状态码,只能在流里发错误
+        console.error("Estimate failed:", e);
+        // Once the stream has started, the HTTP status can't be changed;
+        // the only option is to send the error inside the stream
         controller.enqueue(line({ type: "error", message }));
       } finally {
         controller.close();
@@ -100,7 +105,7 @@ export async function POST(req: Request) {
     headers: {
       "Content-Type": "application/x-ndjson; charset=utf-8",
       "Cache-Control": "no-store",
-      // 有些反代会缓冲流式响应,这个头让 nginx 别缓冲
+      // Some reverse proxies buffer streamed responses; this header tells nginx not to
       "X-Accel-Buffering": "no",
     },
   });

@@ -30,7 +30,7 @@ Bonding required: ${scope.bonding_required ? "yes (premium included)" : "no (pre
 ${formatUSD(t.bidPrice)}`);
 
   parts.push(`## Markup waterfall
-${waterfallRows(t, assumptions.markups)
+${waterfallRows(t, assumptions.markups, scope.bonding_required)
   .map((r) => {
     const rate = r.rate ? ` (${r.rate})` : "";
     const mark = r.isSubtotal ? "= " : "+ ";
@@ -53,6 +53,12 @@ ${estimate.lines
         : l.item.confidence === "inferred"
           ? "quantity inferred"
           : "quantity stated";
+    const match =
+      l.item.match_confidence === "loose"
+        ? ", rate match LOOSE — no catalog rate describes this work"
+        : l.item.match_confidence === "close"
+          ? ", rate match close but inexact"
+          : "";
     const hours = l.labor.reduce((a, x) => a + x.hours, 0);
     return (
       `- [Div ${l.item.csi_division}] ${l.item.description}\n` +

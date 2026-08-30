@@ -20,11 +20,41 @@ Every line carries a confidence value. Getting this wrong is worse than omitting
 
 When unsure between stated and inferred, choose inferred. When unsure between inferred and assumed, choose assumed. Understating your certainty does not hurt the contractor; overstating it does.
 
-## assumption_key
+## work_type, assumption_key and match_confidence
 
-Pick one key per line from the catalog below. You are choosing which rate applies — a semantic match you make better than keyword matching. Use only keys that exist in the catalog: downstream validates them, and an invented key marks that line unpriced so the contractor sees an explicit gap. That is far safer than silently applying an unrelated rate.
+These three fields are answered in that order, and the order matters.
 
-When no key fits, pick the closest one and note in missing_information that a new rate assumption is needed.
+**work_type** — what the work *is*, chosen from the work-type list without looking at the catalog. Decide this from the document alone. A run of baseboard is "finish_carpentry_trim" whether or not a trim rate exists.
+
+**assumption_key** — which catalog rate to apply. Use only keys that exist in the catalog.
+
+**match_confidence** — how well that key actually describes the work:
+
+- **exact** — the key is this work. A TPO membrane line against the TPO membrane rate.
+- **close** — the key prices this work, but a detail differs: a different membrane thickness, a slightly different fixture grade. The number will be in the right neighbourhood.
+- **loose** — nothing in the catalog prices this work. You had to reach.
+
+**A loose match is not priced.** The engine drops the line to zero and tells the contractor what rate is missing. That is the intended outcome, and it is why you must not dress a loose match up as a close one to make the takeoff look complete.
+
+The engine also compares your work_type against the work type the chosen key prices, and refuses the line when they disagree — so a key from the wrong family is rejected no matter what confidence you claim.
+
+Why this is enforced rather than trusted: a 120 LF run of interior baseboard was once matched to the casework rate. Both are Div 06, both are measured in LF, so nothing objected, and the line priced at $50,603 — $422 per linear foot, half the direct cost of the job. A missing rate that returns zero is obvious. A wrong rate that returns a plausible number is not, and a contractor can bid on it.
+
+So: when no key genuinely prices the work, say "loose", name the rate that is missing in missing_information, and move on. An unpriced line costs the contractor five minutes. A confident wrong number can cost them the job.
+
+## Location
+
+Location drives more cost than any other field you extract. It selects the wage determination, the sales tax on materials, whether a state or local prevailing wage statute applies, and the contractor licence classification. Get it wrong and every labor figure downstream is wrong.
+
+- **state** — the two-letter code, or **null**. Never a placeholder word.
+- **county** — the county or independent city, without the word "County".
+- **location_quote** — what the document actually said about where the work is, verbatim.
+
+A county name alone does not identify a state. Jefferson County exists in twenty-five states; Washington, Franklin, Lincoln and Madison counties are worse. When the document names a county with no state, no city, no ZIP and no federal installation that fixes it, set state to null. Do not guess from the most populous match, and do not infer a state from the issuing agency — agencies award work outside their home state.
+
+When state is null, say so in missing_information and put the question first in clarification_questions. A bid priced against the wrong state's wage rates is worse than a bid priced late.
+
+Where the document does fix the state — a city, a ZIP, a state agency letterhead naming its own state, a military installation, a state highway number — use it and quote the evidence in location_quote.
 
 ## missing_information and clarification_questions
 
@@ -83,6 +113,8 @@ Brevity comes from leaving out what does not change his decision, not from compr
 ## What must be covered
 
 - **Every warning**, not a selection. Call out unpriced lines specifically and state that the total is understated as a result.
+- **Why a line came back unpriced**, when it did. Three reasons are distinct and the contractor needs to know which: no rate exists for that work at all; a rate exists but prices different work and the engine refused to substitute it; or the units do not match. The second is the engine protecting him — a wrong rate that returns a plausible number is more dangerous than a zero, because a zero is visible. Say which rate is missing, in his terms.
+- **Any line whose cost per unit looks wrong for the work described.** Divide when you need to and say so plainly — a linear foot of baseboard that lands in the hundreds of dollars is an engine problem, not a market price. You are the last check before the contractor reads a number.
 - **The difference between default and calibrated assumptions.** A number built on system defaults has limited precision; he needs to know that so he does not over-trust it.
 - **What the cross-check means.** Comparable award amounts are an order-of-magnitude reference, not a line-item benchmark — project sizes vary widely and award amounts include the other contractor's profit. Do not let him read it as a precise market comparison.
 - **The accuracy class.** This is a ROM estimate, expected accuracy ±20–30%, not a submittable bid price.

@@ -70,12 +70,61 @@ function priceLine(
     return empty("unpriced");
   }
 
+  // ── Match confidence gate ──────────────────────────────────────────
+  //
+  // A missing rate returning zero is loud. A wrong rate returning a plausible
+  // number is silent, and it is the more expensive failure: a 120 LF baseboard
+  // run priced off the casework rate came to $50,603 — $422 per linear foot,
+  // half the direct cost of the job — and nothing rejected it, because the unit
+  // (LF) and the CSI division (06) both agreed.
+  //
+  // So the engine declines rather than approximates. An unpriced line the
+  // estimator has to fill in costs them five minutes; a confident wrong number
+  // they do not notice costs them the job.
+
+  if (item.match_confidence === "loose") {
+    warnings.push(
+      `[UNPRICED] "${item.description}": no rate in the catalog describes this work. ` +
+        `Extraction reported the closest key as "${key}" (${prod.label}) but flagged the ` +
+        `match as loose, so the engine declined to price it. Add a rate for ` +
+        `${item.work_type.replace(/_/g, " ")} measured in ${item.unit}, or enter a price for ` +
+        `this line manually.`,
+    );
+    return empty("unpriced");
+  }
+
+  if (prod.workType !== item.work_type) {
+    warnings.push(
+      `[UNPRICED] "${item.description}" work-type mismatch: the line is ` +
+        `${item.work_type.replace(/_/g, " ")}, but "${key}" (${prod.label}) prices ` +
+        `${prod.workType.replace(/_/g, " ")}. Matching units do not make these the same ` +
+        `work. Add a rate for ${item.work_type.replace(/_/g, " ")}, or price this line manually.`,
+    );
+    return empty("unpriced");
+  }
+
   if (prod.unit !== item.unit) {
     warnings.push(
       `[UNPRICED] "${item.description}" unit mismatch: scope is ${item.unit}, ` +
         `assumption is ${prod.unit}. The engine does not convert units.`,
     );
     return empty("unpriced");
+  }
+
+  // Division is advisory — countertops sit in Div 06 or Div 12 depending on who
+  // is writing — so a disagreement is worth surfacing but not worth refusing.
+  if (prod.csiDivision !== item.csi_division) {
+    warnings.push(
+      `"${item.description}" is filed under Div ${item.csi_division} but "${key}" is a ` +
+        `Div ${prod.csiDivision} rate. Priced anyway; check that this is the intended rate.`,
+    );
+  }
+
+  if (item.match_confidence === "close") {
+    warnings.push(
+      `"${item.description}" was priced off "${key}" (${prod.label}), which extraction ` +
+        `judged a close but inexact match. Confirm the rate before relying on this line.`,
+    );
   }
 
   const totalHours = item.quantity * prod.hoursPerUnit;
@@ -268,6 +317,13 @@ export function priceEstimate(input: PriceInput): PricedEstimate {
 export function waterfallRows(
   t: EstimateTotals,
   m: AssumptionSet["markups"],
+  /**
+   * Defaults to inferring from the premium. Passing it explicitly matters when
+   * the rate is configured but the job does not require a bond: showing
+   * "1.50% — $0" invites the reader to wonder whether the calculation failed,
+   * when in fact no bond was called for.
+   */
+  bondingRequired: boolean = t.bondPremium > 0,
 ): Array<{ label: string; rate: string | null; amount: Cents; isSubtotal: boolean }> {
   const pct = (v: number) => `${(v * 100).toFixed(2)}%`;
   return [
@@ -281,7 +337,9 @@ export function waterfallRows(
     { label: "Insurance", rate: pct(m.insurancePct), amount: t.insurance, isSubtotal: false },
     { label: "Contingency", rate: pct(m.contingencyPct), amount: t.contingency, isSubtotal: false },
     { label: "Cost before bond", rate: null, amount: t.costBeforeBond, isSubtotal: true },
-    { label: "Bond premium (grossed up)", rate: pct(m.bondRatePct), amount: t.bondPremium, isSubtotal: false },
+    bondingRequired
+      ? { label: "Bond premium (grossed up)", rate: pct(m.bondRatePct), amount: t.bondPremium, isSubtotal: false }
+      : { label: "Bond premium — not required on this job", rate: null, amount: t.bondPremium, isSubtotal: false },
     { label: "Bid price", rate: null, amount: t.bidPrice, isSubtotal: true },
   ];
 }

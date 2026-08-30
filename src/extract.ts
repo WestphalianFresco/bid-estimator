@@ -6,6 +6,18 @@ import { ExtractedScopeSchema, type ExtractedScope } from "./schema";
 
 const client = new Anthropic();
 
+/**
+ * What Layer 1 reads.
+ *
+ * A PDF is passed straight through as a document block rather than being run
+ * through a text extractor first. Solicitations carry quantities in tables and
+ * numbered lists, and flattening them to plain text loses the row/column
+ * association that tells you which number belongs to which line item.
+ */
+export type ScopeSource =
+  | { kind: "text"; text: string }
+  | { kind: "pdf"; base64: string; filename: string };
+
 export interface ExtractResult {
   scope: ExtractedScope;
   unknownKeys: string[];
@@ -17,8 +29,40 @@ export interface ExtractResult {
   };
 }
 
+/** One-line description of the input, for the audit snapshot. */
+export const describeSource = (source: ScopeSource): string =>
+  source.kind === "pdf"
+    ? `[PDF] ${source.filename}`
+    : source.text;
+
+function buildContent(source: ScopeSource): Anthropic.ContentBlockParam[] {
+  const instruction =
+    "Extract the scope from this solicitation. If it is a narrative description " +
+    "rather than a formal solicitation, extract what is stated and record " +
+    "everything a bidder would still need to ask.";
+
+  if (source.kind === "pdf") {
+    // Document first, instruction after - the model attends better to a
+    // question that comes after the material it is asked about.
+    return [
+      {
+        type: "document",
+        source: { type: "base64", media_type: "application/pdf", data: source.base64 },
+      },
+      { type: "text", text: instruction },
+    ];
+  }
+
+  return [
+    {
+      type: "text",
+      text: `${instruction}\n\n<solicitation>\n${source.text}\n</solicitation>`,
+    },
+  ];
+}
+
 export async function extractScope(
-  rfpText: string,
+  source: ScopeSource,
   assumptions: AssumptionSet,
 ): Promise<ExtractResult> {
   const response = await client.messages.parse({
@@ -40,12 +84,7 @@ export async function extractScope(
     },
     thinking: { type: "adaptive" },
 
-    messages: [
-      {
-        role: "user",
-        content: `Extract the scope from this solicitation.\n\n<solicitation>\n${rfpText}\n</solicitation>`,
-      },
-    ],
+    messages: [{ role: "user", content: buildContent(source) }],
   });
 
   const scope = response.parsed_output;

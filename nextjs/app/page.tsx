@@ -1,54 +1,106 @@
 "use client";
 
-import { useState } from "react";
-import { STARTING_DEFAULTS } from "@/lib/assumptions";
-import { formatUSD } from "@/lib/money";
-import { waterfallRows } from "@/lib/price";
-import type { EstimateSnapshot } from "@/lib/schema";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { AssumptionSet } from "@/lib/assumptions";
+import type { BidBandSet } from "@/lib/bands";
+import type { CompositionSummary } from "@/lib/rollups";
+import type { Overrides } from "@/lib/reprice";
+import type { PricedEstimate } from "@/lib/schema";
+import { AdjustPanel } from "./_components/AdjustPanel";
+import { Intake, Progress } from "./_components/Intake";
+import { Report } from "./_components/Report";
+import { SignIn } from "./_components/SignIn";
+import { buildMarkdown } from "./_components/export";
+import type { EstimatePayload, Letterhead, RepriceResponse } from "./_components/types";
+import { money, signedMoney } from "./_components/ui";
 
 /**
- * Minimal usable UI.
+ * The estimator's workspace.
  *
- * Note that this file does **no money math** — every number is computed on the
- * server and sent over; here we only handle formatUSD display and layout. The
- * client takes no part in pricing, and that's deliberate: browser code can be
- * tampered with, so dollar amounts must never be produced there.
+ * This file owns state and the two network calls, and nothing else. It does no
+ * money math: every dollar figure it renders arrived from `/api/estimate` or
+ * `/api/reprice`, because browser code can be tampered with and amounts must
+ * never be produced there. The single exception is the delta badge in the
+ * command bar, which subtracts two engine-produced figures purely as a screen
+ * indicator and never reaches the printed document.
  */
 
-interface EstimatePayload {
-  snapshot: EstimateSnapshot;
-  comparablesCaveat: string | null;
-  pipelineWarnings: string[];
+const REPRICE_DEBOUNCE_MS = 350;
+
+/** What the report is currently showing: the baseline, or a re-priced variant. */
+interface Adjusted {
+  estimate: PricedEstimate;
+  bands: BidBandSet;
+  composition: CompositionSummary;
 }
 
 export default function Page() {
   const [rfpText, setRfpText] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  // Maryland by default — change it when the operating region changes.
+  const [stateCode, setStateCode] = useState("MD");
+  const [county, setCounty] = useState("");
+  const [letterhead, setLetterhead] = useState<Letterhead>({
+    preparedFor: "",
+    preparedBy: "",
+    contact: "",
+  });
+
   const [payload, setPayload] = useState<EstimatePayload | null>(null);
   const [explanation, setExplanation] = useState("");
   const [busy, setBusy] = useState(false);
+  const [stage, setStage] = useState<"extracting" | "pricing" | "writing">("extracting");
   const [error, setError] = useState<string | null>(null);
+  const [intakeOpen, setIntakeOpen] = useState(true);
+
+  const [overrides, setOverrides] = useState<Overrides>({});
+  const [adjusted, setAdjusted] = useState<Adjusted | null>(null);
+  const [repricing, setRepricing] = useState(false);
+  const [repriceError, setRepriceError] = useState<string | null>(null);
+  const [showAdjust, setShowAdjust] = useState(false);
+  const repriceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   async function submit() {
     setBusy(true);
+    setStage("extracting");
     setError(null);
     setPayload(null);
     setExplanation("");
+    setOverrides({});
+    setAdjusted(null);
+    setShowAdjust(false);
+    setRepriceError(null);
 
     try {
-      const res = await fetch("/api/estimate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rfpText }),
-      });
+      // A file wins over the textarea when both are present, so the user never
+      // has to clear one to use the other.
+      const req: RequestInit = file
+        ? {
+            method: "POST",
+            body: (() => {
+              const f = new FormData();
+              f.append("file", file);
+              if (stateCode) f.append("state", stateCode);
+              if (county) f.append("county", county);
+              return f;
+            })(),
+          }
+        : {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ rfpText, state: stateCode, county }),
+          };
+
+      const res = await fetch("/api/estimate", req);
 
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? `Request failed (${res.status})`);
       }
-      if (!res.body) throw new Error("Response had no body");
+      if (!res.body) throw new Error("The response had no body");
 
-      // Read NDJSON line by line. Note that chunk boundaries don't necessarily
-      // fall on newlines, so keep a buffer to stitch incomplete lines together.
+      // NDJSON, read line by line. Chunk boundaries do not fall on newlines, so
+      // an incomplete tail is held over for the next read.
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -59,13 +111,15 @@ export default function Page() {
         buffer += decoder.decode(value, { stream: true });
 
         const lines = buffer.split("\n");
-        buffer = lines.pop() ?? ""; // last segment may be incomplete; hold it for the next round
+        buffer = lines.pop() ?? "";
 
         for (const raw of lines) {
           if (!raw.trim()) continue;
           const msg = JSON.parse(raw);
           if (msg.type === "estimate") {
             setPayload(msg as EstimatePayload);
+            setIntakeOpen(false);
+            setStage("writing");
           } else if (msg.type === "text") {
             setExplanation((prev) => prev + msg.delta);
           } else if (msg.type === "error") {
@@ -80,133 +134,236 @@ export default function Page() {
     }
   }
 
-  const est = payload?.snapshot.estimate;
-  const scope = payload?.snapshot.scope;
-  const allWarnings = [...(payload?.pipelineWarnings ?? []), ...(est?.warnings ?? [])];
+  /**
+   * Sends the edited inputs to the engine and renders what comes back.
+   *
+   * Debounced so dragging a slider does not fire a request per frame. The call
+   * is a pure function server-side — no model, no network, no clock — so it is
+   * fast and free to make on every change.
+   */
+  const reprice = useCallback(
+    (next: Overrides) => {
+      if (!payload) return;
+      if (repriceTimer.current) clearTimeout(repriceTimer.current);
+
+      repriceTimer.current = setTimeout(async () => {
+        setRepricing(true);
+        setRepriceError(null);
+        try {
+          const res = await fetch("/api/reprice", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              scope: payload.snapshot.scope,
+              assumptions: payload.snapshot.assumptionsSnapshot,
+              wages: payload.wages,
+              comparables: payload.comparables,
+              overrides: next,
+            }),
+          });
+          const body = await res.json();
+          if (!res.ok) {
+            throw new Error([body.error, ...(body.detail ?? [])].filter(Boolean).join(" — "));
+          }
+          const r = body as RepriceResponse;
+          setAdjusted(
+            r.unchanged
+              ? null
+              : { estimate: r.estimate, bands: r.bands, composition: r.composition },
+          );
+        } catch (e) {
+          setRepriceError(e instanceof Error ? e.message : String(e));
+        } finally {
+          setRepricing(false);
+        }
+      }, REPRICE_DEBOUNCE_MS);
+    },
+    [payload],
+  );
+
+  useEffect(
+    () => () => {
+      if (repriceTimer.current) clearTimeout(repriceTimer.current);
+    },
+    [],
+  );
+
+  function update(next: Overrides) {
+    setOverrides(next);
+    reprice(next);
+  }
+
+  function resetAdjustments() {
+    if (repriceTimer.current) clearTimeout(repriceTimer.current);
+    setOverrides({});
+    setAdjusted(null);
+    setRepriceError(null);
+  }
+
+  const baseline = payload?.snapshot.estimate ?? null;
+  const estimate = adjusted?.estimate ?? baseline;
+  const bands = adjusted?.bands ?? payload?.bands ?? null;
+  const composition = adjusted?.composition ?? payload?.composition ?? null;
+  const isAdjusted = adjusted !== null;
+
+  // Display-only indicator: the difference of two engine-produced figures. It
+  // is never written into the report.
+  const delta =
+    estimate && baseline ? estimate.totals.bidPrice - baseline.totals.bidPrice : 0;
+
+  function downloadMarkdown() {
+    if (!payload || !estimate || !bands || !composition) return;
+    const md = buildMarkdown({
+      payload,
+      estimate,
+      bands,
+      composition,
+      explanation,
+      isAdjusted,
+      overrides,
+      letterhead,
+    });
+    const url = URL.createObjectURL(new Blob([md], { type: "text/markdown;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `bid-${payload.snapshot.id.slice(0, 8)}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const ready = payload && estimate && bands && composition;
 
   return (
-    <main style={{ maxWidth: 900, margin: "0 auto", padding: 24, fontFamily: "system-ui" }}>
-      <h1 style={{ fontSize: 24, marginBottom: 4 }}>Gov Bid Estimator</h1>
-      <p style={{ color: "#666", fontSize: 14, marginTop: 0 }}>
-        ROM / conceptual estimate — expected accuracy ±20–30%. Not a directly submittable bid price.
-      </p>
-
-      <textarea
-        value={rfpText}
-        onChange={(e) => setRfpText(e.target.value)}
-        placeholder="Paste the Scope of Work section of the solicitation…"
-        rows={14}
-        style={{
-          width: "100%",
-          padding: 12,
-          fontFamily: "ui-monospace, monospace",
-          fontSize: 13,
-          border: "1px solid #ccc",
-          borderRadius: 6,
-        }}
-      />
-
-      <button
-        onClick={submit}
-        disabled={busy || rfpText.trim().length < 50}
-        style={{
-          marginTop: 12,
-          padding: "10px 20px",
-          fontSize: 15,
-          cursor: busy ? "wait" : "pointer",
-        }}
-      >
-        {busy ? "Estimating…" : "Generate estimate"}
-      </button>
-
-      {error && (
-        <div style={{ marginTop: 16, padding: 12, background: "#fee", borderRadius: 6 }}>
-          <strong>Something went wrong:</strong> {error}
+    <main className="shell">
+      <header className="topbar no-print">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">
+            M
+          </span>
+          <span>
+            Mayorga Estimate Studio
+            <span className="brand-sub"> · we estimate better</span>
+          </span>
         </div>
-      )}
-
-      {est && scope && (
-        <>
-          <section style={{ marginTop: 32 }}>
-            <h2 style={{ fontSize: 18 }}>{scope.project_title}</h2>
-            <p style={{ color: "#666", fontSize: 14 }}>
-              {scope.county ? `${scope.county} County, ` : ""}
-              {scope.state} · NAICS {scope.naics_code}
-              {scope.gross_square_feet
-                ? ` · ${scope.gross_square_feet.toLocaleString()} SF`
-                : ""}
-            </p>
-            <div style={{ fontSize: 32, fontWeight: 600, marginTop: 8 }}>
-              {formatUSD(est.totals.bidPrice)}
-            </div>
-          </section>
-
-          <section style={{ marginTop: 24 }}>
-            <h3 style={{ fontSize: 15 }}>Markup waterfall</h3>
-            <table style={{ width: "100%", fontSize: 14, borderCollapse: "collapse" }}>
-              <tbody>
-                {waterfallRows(est.totals, STARTING_DEFAULTS.markups).map((r, i) => (
-                  <tr
-                    key={i}
-                    style={{
-                      fontWeight: r.isSubtotal ? 600 : 400,
-                      borderTop: r.isSubtotal ? "1px solid #ddd" : "none",
-                    }}
-                  >
-                    <td style={{ padding: "4px 0" }}>{r.label}</td>
-                    <td style={{ color: "#888", textAlign: "right", paddingRight: 16 }}>
-                      {r.rate ?? ""}
-                    </td>
-                    <td style={{ textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                      {formatUSD(r.amount)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </section>
-
-          {allWarnings.length > 0 && (
-            <section style={{ marginTop: 24 }}>
-              <h3 style={{ fontSize: 15 }}>Warnings ({allWarnings.length})</h3>
-              <ul style={{ fontSize: 14, lineHeight: 1.6, paddingLeft: 20 }}>
-                {allWarnings.map((w, i) => (
-                  <li key={i} style={{ marginBottom: 6 }}>
-                    {w}
-                  </li>
-                ))}
-              </ul>
-            </section>
+        <div className="topbar-actions">
+          {ready && (
+            <>
+              <button type="button" className="ghost-btn" onClick={downloadMarkdown}>
+                Markdown
+              </button>
+              <button type="button" className="btn" onClick={() => window.print()}>
+                Print / PDF
+              </button>
+            </>
           )}
-        </>
-      )}
+          <SignIn />
+        </div>
+      </header>
 
-      {explanation && (
-        <section style={{ marginTop: 24 }}>
-          <h3 style={{ fontSize: 15 }}>Estimate notes</h3>
-          <div style={{ fontSize: 14, lineHeight: 1.7, whiteSpace: "pre-wrap" }}>
-            {explanation}
-          </div>
+      {!payload && !busy && (
+        <section className="hero-intro no-print">
+          <h1 className="hero-title">
+            Submit your scope.
+            <br />
+            We take care of the rest.
+          </h1>
         </section>
       )}
 
-      {est && (
-        <footer
-          style={{
-            marginTop: 40,
-            paddingTop: 16,
-            borderTop: "1px solid #eee",
-            fontSize: 12,
-            color: "#888",
-          }}
-        >
-          This estimate is for reference only and is not a bid guarantee. The user must
-          independently verify all quantities, unit prices, and assumptions. Have key items
-          reviewed by a registered estimator.
-          <br />
-          Engine version {payload.snapshot.engineVersion} · Snapshot {payload.snapshot.id} ·
-          Wage determination {payload.snapshot.wageDeterminationId || "not loaded"}
-        </footer>
+      <Intake
+        rfpText={rfpText}
+        onText={setRfpText}
+        file={file}
+        onFile={setFile}
+        stateCode={stateCode}
+        onState={setStateCode}
+        county={county}
+        onCounty={setCounty}
+        letterhead={letterhead}
+        onLetterhead={setLetterhead}
+        busy={busy}
+        onSubmit={submit}
+        collapsed={!intakeOpen}
+        onExpand={() => setIntakeOpen(true)}
+      />
+
+      {busy && <Progress stage={stage} />}
+
+      {error && (
+        <div className="notice no-print" style={{ marginTop: 20 }}>
+          <strong>The estimate failed.</strong> {error}
+        </div>
+      )}
+
+      {ready && (
+        <>
+          <div className="command-bar no-print">
+            <div>
+              <span className="eyebrow">
+                {isAdjusted ? "Adjusted bid price" : "Recommended bid price"}
+                {repricing && <span className="pulse-tag"> recalculating…</span>}
+              </span>
+              <div className="command-price">
+                {money(estimate!.totals.bidPrice)}
+                {isAdjusted && delta !== 0 && (
+                  <span className={`command-delta ${delta > 0 ? "is-up" : "is-down"}`}>
+                    {signedMoney(delta)}
+                  </span>
+                )}
+              </div>
+              <div className="command-band">
+                Range {money(bands!.bands[0].bidPrice)} –{" "}
+                {money(bands!.bands[bands!.bands.length - 1].bidPrice)}
+              </div>
+            </div>
+            <div className="topbar-actions">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => setShowAdjust((v) => !v)}
+                aria-expanded={showAdjust}
+              >
+                {showAdjust ? "Hide adjustments" : "Adjust prices"}
+              </button>
+              {isAdjusted && (
+                <button type="button" className="link-btn" onClick={resetAdjustments}>
+                  reset
+                </button>
+              )}
+            </div>
+          </div>
+
+          {repriceError && (
+            <div className="notice no-print" style={{ marginTop: 14 }}>
+              <strong>Could not re-price.</strong> {repriceError}
+            </div>
+          )}
+
+          {showAdjust && (
+            <AdjustPanel
+              scope={payload!.snapshot.scope}
+              assumptions={payload!.snapshot.assumptionsSnapshot as AssumptionSet}
+              wages={payload!.wages}
+              estimate={estimate!}
+              overrides={overrides}
+              onChange={update}
+              onReset={resetAdjustments}
+              isAdjusted={isAdjusted}
+              repricing={repricing}
+            />
+          )}
+
+          <Report
+            payload={payload!}
+            estimate={estimate!}
+            bands={bands!}
+            composition={composition!}
+            explanation={explanation}
+            isAdjusted={isAdjusted}
+            overrides={overrides}
+            letterhead={letterhead}
+          />
+        </>
       )}
     </main>
   );

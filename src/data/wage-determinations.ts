@@ -1,5 +1,5 @@
 import { add, fromDollars, scale, type Cents } from "../money";
-import type { Trade } from "../schema";
+import { isUsState, type Trade, type UsState } from "../schema";
 
 export interface WageRate {
   trade: Trade;
@@ -11,7 +11,7 @@ export interface WageRate {
 export interface WageTable {
   determinationId: string;
   effectiveDate: string;
-  state: string;
+  state: UsState | null;
   county: string | null;
   rates: Partial<Record<Trade, WageRate>>;
 }
@@ -22,16 +22,22 @@ export const loadedRate = (r: WageRate, burdenPct: number): Cents =>
 export const EMPTY_WAGE_TABLE: WageTable = {
   determinationId: "",
   effectiveDate: "",
-  state: "",
+  state: null,
   county: null,
   rates: {},
 };
 
 export async function fetchWageDetermination(opts: {
-  state: string;
+  state: UsState | null;
   county: string | null;
   apiKey: string;
 }): Promise<WageTable> {
+  if (!isUsState(opts.state)) {
+    throw new Error(
+      "Cannot look up a wage determination without a state. Set the location first.",
+    );
+  }
+
   const url = new URL("https://api.sam.gov/prod/wageDetermination/v1/search");
   url.searchParams.set("api_key", opts.apiKey);
   url.searchParams.set("state", opts.state);
@@ -51,7 +57,7 @@ export async function fetchWageDetermination(opts: {
 
 export function parseWageDetermination(
   raw: unknown,
-  state: string,
+  state: UsState,
   county: string | null,
 ): WageTable {
   const doc = raw as {
@@ -124,7 +130,10 @@ export const isStale = (t: WageTable, today: string): boolean => {
   return now - eff > 365 * 24 * 60 * 60 * 1000;
 };
 
-export const makeFixtureWageTable = (state = "CA", county = "Los Angeles"): WageTable => ({
+export const makeFixtureWageTable = (
+  state: UsState | null = "CA",
+  county: string | null = "Los Angeles",
+): WageTable => ({
   determinationId: "FIXTURE-DO-NOT-USE-IN-PROD",
   effectiveDate: "2026-01-01",
   state,

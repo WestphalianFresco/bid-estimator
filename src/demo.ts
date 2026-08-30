@@ -47,7 +47,7 @@ async function main() {
   console.log("Extracting scope and pricing...\n");
 
   const { snapshot, comparablesCaveat, pipelineWarnings } = await runEstimate({
-    rfpText: SAMPLE_RFP,
+    source: { kind: "text", text: SAMPLE_RFP },
     assumptions: STARTING_DEFAULTS,
     id: "demo-001",
     now: "2026-08-17T00:00:00Z",

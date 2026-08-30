@@ -1,12 +1,13 @@
 {
-  "name": "gov-bid-estimator",
+  "name": "contractor-budget-estimator",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "demo": "tsx src/demo.ts"
+    "demo": "tsx src/demo.ts",
+    "refresh-prices": "tsx src/refresh-prices.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",

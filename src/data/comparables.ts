@@ -1,4 +1,5 @@
 import { fromDollars, type Cents } from "../money";
+import { isUsState, type UsState } from "../schema";
 
 export interface ComparableAward {
   awardId: string;
@@ -12,7 +13,7 @@ export interface ComparableAward {
 export interface ComparablesResult {
   awards: ComparableAward[];
   caveat: string;
-  query: { naics: string; psc: string | null; state: string; years: number };
+  query: { naics: string; psc: string | null; state: UsState | null; years: number };
 }
 
 const CONTRACT_AWARD_TYPES = ["A", "B", "C", "D"];
@@ -20,11 +21,26 @@ const CONTRACT_AWARD_TYPES = ["A", "B", "C", "D"];
 export async function fetchComparables(opts: {
   naics: string;
   psc?: string | null;
-  state: string;
+  state: UsState | null;
   years?: number;
   limit?: number;
 }): Promise<ComparablesResult> {
   const years = opts.years ?? 3;
+
+  // USAspending rejects anything that is not a two-letter code with a 422, so a
+  // location the extractor could not resolve must short-circuit here. Returning
+  // an empty result rather than throwing keeps this a missing cross-check, which
+  // is what it is, instead of a failure the contractor has to interpret.
+  if (!isUsState(opts.state)) {
+    return {
+      awards: [],
+      caveat:
+        "No comparable awards were retrieved because the place of performance is not " +
+        "resolved to a state. Set the location and re-run to enable the cross-check.",
+      query: { naics: opts.naics, psc: opts.psc ?? null, state: null, years },
+    };
+  }
+
   const limit = Math.min(opts.limit ?? 100, 100);
 
   const end = new Date();

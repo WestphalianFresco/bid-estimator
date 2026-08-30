@@ -7,7 +7,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "demo": "tsx src/demo.ts",
-    "refresh-prices": "tsx src/refresh-prices.ts"
+    "refresh-prices": "tsx src/refresh-prices.ts",
+    "api": "tsx src/api-admin.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",

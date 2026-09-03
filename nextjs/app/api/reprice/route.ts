@@ -51,8 +51,13 @@ export async function POST(req: Request) {
       composition: summarizeComposition(estimate, input.scope),
     });
   } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
     console.error("Reprice failed:", e);
+    const message =
+      process.env.NODE_ENV === "production"
+        ? "Re-pricing failed."
+        : e instanceof Error
+          ? e.message
+          : String(e);
     return Response.json({ error: message }, { status: 500 });
   }
 }

@@ -4,6 +4,7 @@ import { runEstimate } from "@/lib/pipeline";
 import type { ScopeSource } from "@/lib/extract";
 import type { LocationOverride } from "@/lib/pipeline";
 import { isUsState } from "@/lib/schema";
+import { isRateLimited } from "@/lib/rate-limit";
 import type { MaterialQuote } from "@/lib/data/home-depot";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -261,6 +262,15 @@ async function readSource(req: Request): Promise<ParseOk | ParseErr> {
 }
 
 export async function POST(req: Request) {
+  // Before the body is read: this endpoint costs two Opus calls per request and
+  // there is no sign-in behind it.
+  if (isRateLimited(req.headers)) {
+    return Response.json(
+      { error: "Too many estimates from this address. Try again in an hour." },
+      { status: 429 },
+    );
+  }
+
   const parsed = await readSource(req);
   if (!parsed.ok) {
     return Response.json({ error: parsed.error }, { status: parsed.status });

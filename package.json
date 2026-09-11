@@ -10,7 +10,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "demo": "tsx src/demo.ts",
-    "refresh-prices": "tsx src/refresh-prices.ts"
+    "refresh-prices": "tsx src/refresh-prices.ts",
+    "visits": "tail -n 50 visits.log"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",

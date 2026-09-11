@@ -241,7 +241,7 @@ export default function Page() {
             M
           </span>
           <span>
-            Mayorga Estimate Studio
+            Tidiverse Studio
             <span className="brand-sub"> · we estimate better</span>
           </span>
         </div>

@@ -4,17 +4,27 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev": "next dev nextjs",
+    "build": "next build nextjs",
+    "start": "next start nextjs",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "demo": "tsx src/demo.ts",
-    "refresh-prices": "tsx src/refresh-prices.ts"
+    "refresh-prices": "tsx src/refresh-prices.ts",
+    "visits": "tail -n 50 visits.log"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.117.1",
+    "mammoth": "^1.12.2",
+    "next": "^16.3.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.7",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"

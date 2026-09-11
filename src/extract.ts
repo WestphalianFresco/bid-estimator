@@ -35,7 +35,7 @@ export const describeSource = (source: ScopeSource): string =>
     ? `[PDF] ${source.filename}`
     : source.text;
 
-function buildContent(source: ScopeSource): Anthropic.ContentBlockParam[] {
+export function buildContent(source: ScopeSource): Anthropic.ContentBlockParam[] {
   const instruction =
     "Extract the scope from this solicitation. If it is a narrative description " +
     "rather than a formal solicitation, extract what is stated and record " +
@@ -53,10 +53,16 @@ function buildContent(source: ScopeSource): Anthropic.ContentBlockParam[] {
     ];
   }
 
+  // A solicitation is uploaded by whoever is using the tool and is not trusted
+  // input: text containing the closing tag would otherwise break out of the
+  // delimiter and read as instructions. Neutralize it rather than dropping it,
+  // so the document still reads normally.
+  const document = source.text.replace(/<\/?solicitation>/gi, "[tag removed]");
+
   return [
     {
       type: "text",
-      text: `${instruction}\n\n<solicitation>\n${source.text}\n</solicitation>`,
+      text: `${instruction}\n\n<solicitation>\n${document}\n</solicitation>`,
     },
   ];
 }

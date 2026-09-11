@@ -169,7 +169,7 @@ export function Report({
               M
             </span>
             <span>
-              Mayorga Estimate Studio
+              Tidiverse Studio
               <span className="brand-sub"> · we estimate better</span>
             </span>
           </div>
@@ -613,7 +613,7 @@ export function Report({
 
       <div className="print-footer">
         <span>
-          <strong>Mayorga Estimate Studio</strong> · {scope.project_title}
+          <strong>Tidiverse Studio</strong> · {scope.project_title}
         </span>
         <span>
           {quoteNo} · engine {snapshot.engineVersion}

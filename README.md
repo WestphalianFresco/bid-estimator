@@ -1,4 +1,4 @@
-# Mayorga Estimate Studio
+# Tidiverse Studio
 
 *We estimate better · by WestphalianFresco*
 

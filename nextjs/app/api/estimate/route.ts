@@ -4,6 +4,7 @@ import { runEstimate } from "@/lib/pipeline";
 import type { ScopeSource } from "@/lib/extract";
 import type { LocationOverride } from "@/lib/pipeline";
 import { isUsState } from "@/lib/schema";
+import { isRateLimited } from "@/lib/rate-limit";
 import type { MaterialQuote } from "@/lib/data/home-depot";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -130,6 +131,21 @@ const isParseErr = (v: unknown): v is ParseErr =>
 async function readSource(req: Request): Promise<ParseOk | ParseErr> {
   const contentType = req.headers.get("content-type") ?? "";
 
+  // The per-file check below happens after formData() has already buffered the
+  // whole body, so it is not a defence against a huge upload. Reject on the
+  // declared length first.
+  // ponytail: a chunked request sends no content-length and slips past this;
+  // the platform body limit (Vercel: 4.5 MB) is the backstop. Add a counting
+  // stream here only if this ever runs somewhere without one.
+  const declared = Number(req.headers.get("content-length") ?? 0);
+  if (declared > MAX_FILE_BYTES) {
+    return {
+      ok: false,
+      status: 413,
+      error: `Request is ${(declared / 1024 / 1024).toFixed(1)} MB; the limit is 20 MB. Upload only the Scope of Work section.`,
+    };
+  }
+
   // ── Uploaded file ──────────────────────────────────────────────────
   if (contentType.includes("multipart/form-data")) {
     let form: FormData;
@@ -181,10 +197,13 @@ async function readSource(req: Request): Promise<ParseOk | ParseErr> {
         const mammoth = await import("mammoth");
         text = (await mammoth.extractRawText({ buffer: bytes })).value;
       } catch (e) {
+        // The detail belongs in the server log, not in the response: module
+        // paths and parser internals are not the caller's business.
+        console.error("docx extraction failed:", e);
         return {
           ok: false,
           status: 422,
-          error: `Could not read the .docx file: ${e instanceof Error ? e.message : String(e)}`,
+          error: "Could not read the .docx file. Save it as .pdf or paste the text instead.",
         };
       }
       if (text.trim().length < MIN_TEXT) {
@@ -243,6 +262,15 @@ async function readSource(req: Request): Promise<ParseOk | ParseErr> {
 }
 
 export async function POST(req: Request) {
+  // Before the body is read: this endpoint costs two Opus calls per request and
+  // there is no sign-in behind it.
+  if (isRateLimited(req.headers)) {
+    return Response.json(
+      { error: "Too many estimates from this address. Try again in an hour." },
+      { status: 429 },
+    );
+  }
+
   const parsed = await readSource(req);
   if (!parsed.ok) {
     return Response.json({ error: parsed.error }, { status: parsed.status });
@@ -311,10 +339,16 @@ export async function POST(req: Request) {
 
         controller.enqueue(line({ type: "done" }));
       } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
         console.error("Estimate failed:", e);
         // Once the stream has started, the HTTP status can't be changed;
-        // the only option is to send the error inside the stream
+        // the only option is to send the error inside the stream. Upstream
+        // errors carry provider response bodies, so only development sees them.
+        const message =
+          process.env.NODE_ENV === "production"
+            ? "The estimate failed. Try again, or check the server log."
+            : e instanceof Error
+              ? e.message
+              : String(e);
         controller.enqueue(line({ type: "error", message }));
       } finally {
         controller.close();

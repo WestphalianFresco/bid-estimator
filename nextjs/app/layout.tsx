@@ -21,7 +21,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Mayorga Estimate Studio — We Estimate Better",
+  title: "Tidiverse Studio — We Estimate Better",
   description:
     "Conceptual construction cost estimating. AACE Class 4–5 (±20–30%), priced from prevailing " +
     "wage rates and a calibrated rate catalog, then cross-checked against comparable projects.",
